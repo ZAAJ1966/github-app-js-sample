@@ -1,0 +1,385 @@
+Option Explicit
+
+' === وظائف الأمان والتشفير ===
+
+Public Function ValidateLogin(username As String, password As String) As Boolean
+    On Error GoTo ErrorHandler
+    
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim storedHash As String
+    Dim inputHash As String
+    Dim loginAttempts As Integer
+    Dim isLocked As Boolean
+    
+    Set ws = ThisWorkbook.Worksheets("Users")
+    lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row
+    
+    inputHash = HashPassword(password)
+    
+    For i = 2 To lastRow
+        If UCase(Trim(ws.Cells(i, 2).Value)) = UCase(Trim(username)) Then
+            ' التحقق من حالة القفل
+            isLocked = ws.Cells(i, 10).Value
+            loginAttempts = ws.Cells(i, 9).Value
+            
+            If isLocked Or loginAttempts >= 3 Then
+                MsgBox "الحساب مقفل. يرجى الاتصال بالمدير.", vbCritical, "حساب مقفل"
+                ValidateLogin = False
+                Exit Function
+            End If
+            
+            storedHash = ws.Cells(i, 3).Value
+            
+            If storedHash = inputHash And ws.Cells(i, 6).Value = True Then
+                ' تسجيل دخول ناجح
+                Call LoadCurrentUser(i, ws)
+                ws.Cells(i, 8).Value = Now() ' تحديث آخر تسجيل دخول
+                ws.Cells(i, 9).Value = 0 ' إعادة تعيين محاولات الدخول
+                
+                Call LogActivity("LOGIN_SUCCESS", "تسجيل دخول ناجح للمستخدم: " & username)
+                ValidateLogin = True
+                Exit Function
+            Else
+                ' تسجيل دخول فاشل
+                ws.Cells(i, 9).Value = loginAttempts + 1
+                
+                If loginAttempts + 1 >= 3 Then
+                    ws.Cells(i, 10).Value = True ' قفل الحساب
+                    Call LogActivity("ACCOUNT_LOCKED", "تم قفل الحساب: " & username)
+                    MsgBox "تم قفل الحساب بعد 3 محاولات فاشلة. يرجى الاتصال بالمدير.", vbCritical, "حساب مقفل"
+                Else
+                    MsgBox "بيانات الدخول غير صحيحة. المحاولات المتبقية: " & (3 - (loginAttempts + 1)), vbExclamation, "خطأ في تسجيل الدخول"
+                End If
+                
+                Call LogActivity("LOGIN_FAILED", "محاولة دخول فاشلة للمستخدم: " & username)
+                ValidateLogin = False
+                Exit Function
+            End If
+        End If
+    Next i
+    
+    Call LogActivity("LOGIN_FAILED", "محاولة دخول بمستخدم غير موجود: " & username)
+    MsgBox "اسم المستخدم غير موجود", vbCritical, "خطأ في تسجيل الدخول"
+    ValidateLogin = False
+    Exit Function
+    
+ErrorHandler:
+    Call LogError("ValidateLogin", Err.Description)
+    ValidateLogin = False
+End Function
+
+Private Sub LoadCurrentUser(userRow As Long, ws As Worksheet)
+    With CurrentUser
+        .UserID = ws.Cells(userRow, 1).Value
+        .Username = ws.Cells(userRow, 2).Value
+        .FullName = ws.Cells(userRow, 5).Value
+        .UserType = ws.Cells(userRow, 4).Value
+        .IsActive = ws.Cells(userRow, 6).Value
+        .LastLogin = ws.Cells(userRow, 8).Value
+        .Permissions = GetUserPermissions(.UserType)
+    End With
+    
+    IsLoggedIn = True
+End Sub
+
+Public Function HashPassword(password As String) As String
+    ' تشفير بسيط باستخدام خوارزمية مخصصة
+    Dim hashedPassword As String
+    Dim i As Integer
+    Dim charCode As Integer
+    Dim hashValue As Long
+    
+    hashValue = 5381
+    
+    For i = 1 To Len(password)
+        charCode = Asc(Mid(password, i, 1))
+        hashValue = ((hashValue * 33) Xor charCode) And &H7FFFFFFF
+    Next i
+    
+    ' إضافة salt بناءً على طول كلمة المرور والحرف الأول
+    Dim salt As String
+    salt = Hex(Len(password)) & Hex(Asc(Left(password, 1)))
+    
+    hashedPassword = Hex(hashValue) & salt
+    HashPassword = hashedPassword
+End Function
+
+Public Function GetUserPermissions(userType As String) As String
+    Select Case UCase(Trim(userType))
+        Case "مدير", "MANAGER"
+            GetUserPermissions = "ALL"
+        Case "موظف تخليص", "CLEARANCE_OFFICER"
+            GetUserPermissions = "ADD_INVOICE,EDIT_INVOICE,VIEW_INVOICE,UPLOAD_DOCUMENTS,SEARCH_INVOICES"
+        Case "مدقق", "AUDITOR"
+            GetUserPermissions = "VIEW_INVOICE,SEARCH_INVOICES,GENERATE_REPORTS,VIEW_LOGS"
+        Case "محاسب", "ACCOUNTANT"
+            GetUserPermissions = "VIEW_INVOICE,UPDATE_PAYMENT,GENERATE_FINANCIAL_REPORTS,SEARCH_INVOICES"
+        Case Else
+            GetUserPermissions = "VIEW_ONLY"
+    End Select
+End Function
+
+Public Function CheckPermission(action As String) As Boolean
+    If Not IsLoggedIn Then
+        CheckPermission = False
+        Exit Function
+    End If
+    
+    If CurrentUser.Permissions = "ALL" Then
+        CheckPermission = True
+        Exit Function
+    End If
+    
+    CheckPermission = InStr(UCase(CurrentUser.Permissions), UCase(action)) > 0
+End Function
+
+Public Sub ShowAccessDeniedMessage()
+    MsgBox "ليس لديك صلاحية للوصول لهذه الوظيفة." & vbCrLf & _
+           "يرجى الاتصال بالمدير للحصول على الصلاحيات المطلوبة.", _
+           vbExclamation, "وصول مرفوض"
+End Sub
+
+Public Sub LogoutCurrentUser()
+    If IsLoggedIn Then
+        Call LogActivity("LOGOUT", "تسجيل خروج للمستخدم: " & CurrentUser.Username)
+    End If
+    
+    ' مسح بيانات المستخدم الحالي
+    With CurrentUser
+        .UserID = ""
+        .Username = ""
+        .FullName = ""
+        .UserType = ""
+        .IsActive = False
+        .LastLogin = #1/1/1900#
+        .Permissions = ""
+    End With
+    
+    IsLoggedIn = False
+End Sub
+
+' === وظائف إدارة المستخدمين (للمدير فقط) ===
+
+Public Function AddNewUser(username As String, password As String, fullName As String, userType As String) As Boolean
+    On Error GoTo ErrorHandler
+    
+    If Not CheckPermission("MANAGE_USERS") Then
+        Call ShowAccessDeniedMessage
+        AddNewUser = False
+        Exit Function
+    End If
+    
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim newUserID As String
+    
+    Set ws = ThisWorkbook.Worksheets("Users")
+    
+    ' التحقق من عدم تكرار اسم المستخدم
+    If UserExists(username) Then
+        MsgBox "اسم المستخدم موجود مسبقاً: " & username, vbCritical
+        AddNewUser = False
+        Exit Function
+    End If
+    
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    newUserID = "USR" & Format(lastRow - 1, "000")
+    
+    With ws
+        .Cells(lastRow, 1).Value = newUserID
+        .Cells(lastRow, 2).Value = username
+        .Cells(lastRow, 3).Value = HashPassword(password)
+        .Cells(lastRow, 4).Value = userType
+        .Cells(lastRow, 5).Value = fullName
+        .Cells(lastRow, 6).Value = True
+        .Cells(lastRow, 7).Value = Now()
+        .Cells(lastRow, 8).Value = ""
+        .Cells(lastRow, 9).Value = 0
+        .Cells(lastRow, 10).Value = False
+    End With
+    
+    Call LogActivity("ADD_USER", "تم إضافة مستخدم جديد: " & username)
+    AddNewUser = True
+    Exit Function
+    
+ErrorHandler:
+    Call LogError("AddNewUser", Err.Description)
+    AddNewUser = False
+End Function
+
+Public Function UpdateUser(userID As String, username As String, fullName As String, userType As String, isActive As Boolean) As Boolean
+    On Error GoTo ErrorHandler
+    
+    If Not CheckPermission("MANAGE_USERS") Then
+        Call ShowAccessDeniedMessage
+        UpdateUser = False
+        Exit Function
+    End If
+    
+    Dim ws As Worksheet
+    Dim userRow As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Users")
+    userRow = FindUserRow(userID)
+    
+    If userRow = 0 Then
+        MsgBox "المستخدم غير موجود", vbCritical
+        UpdateUser = False
+        Exit Function
+    End If
+    
+    With ws
+        .Cells(userRow, 2).Value = username
+        .Cells(userRow, 4).Value = userType
+        .Cells(userRow, 5).Value = fullName
+        .Cells(userRow, 6).Value = isActive
+    End With
+    
+    Call LogActivity("UPDATE_USER", "تم تعديل بيانات المستخدم: " & username)
+    UpdateUser = True
+    Exit Function
+    
+ErrorHandler:
+    Call LogError("UpdateUser", Err.Description)
+    UpdateUser = False
+End Function
+
+Public Function ResetUserPassword(userID As String, newPassword As String) As Boolean
+    On Error GoTo ErrorHandler
+    
+    If Not CheckPermission("MANAGE_USERS") Then
+        Call ShowAccessDeniedMessage
+        ResetUserPassword = False
+        Exit Function
+    End If
+    
+    Dim ws As Worksheet
+    Dim userRow As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Users")
+    userRow = FindUserRow(userID)
+    
+    If userRow = 0 Then
+        MsgBox "المستخدم غير موجود", vbCritical
+        ResetUserPassword = False
+        Exit Function
+    End If
+    
+    With ws
+        .Cells(userRow, 3).Value = HashPassword(newPassword)
+        .Cells(userRow, 9).Value = 0 ' إعادة تعيين محاولات الدخول
+        .Cells(userRow, 10).Value = False ' إلغاء قفل الحساب
+    End With
+    
+    Call LogActivity("RESET_PASSWORD", "تم إعادة تعيين كلمة مرور المستخدم: " & ws.Cells(userRow, 2).Value)
+    ResetUserPassword = True
+    Exit Function
+    
+ErrorHandler:
+    Call LogError("ResetUserPassword", Err.Description)
+    ResetUserPassword = False
+End Function
+
+Public Function UnlockUserAccount(userID As String) As Boolean
+    On Error GoTo ErrorHandler
+    
+    If Not CheckPermission("MANAGE_USERS") Then
+        Call ShowAccessDeniedMessage
+        UnlockUserAccount = False
+        Exit Function
+    End If
+    
+    Dim ws As Worksheet
+    Dim userRow As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Users")
+    userRow = FindUserRow(userID)
+    
+    If userRow = 0 Then
+        MsgBox "المستخدم غير موجود", vbCritical
+        UnlockUserAccount = False
+        Exit Function
+    End If
+    
+    With ws
+        .Cells(userRow, 9).Value = 0 ' إعادة تعيين محاولات الدخول
+        .Cells(userRow, 10).Value = False ' إلغاء قفل الحساب
+    End With
+    
+    Call LogActivity("UNLOCK_ACCOUNT", "تم إلغاء قفل حساب المستخدم: " & ws.Cells(userRow, 2).Value)
+    UnlockUserAccount = True
+    Exit Function
+    
+ErrorHandler:
+    Call LogError("UnlockUserAccount", Err.Description)
+    UnlockUserAccount = False
+End Function
+
+' === وظائف مساعدة ===
+
+Private Function UserExists(username As String) As Boolean
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Users")
+    lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row
+    
+    For i = 2 To lastRow
+        If UCase(Trim(ws.Cells(i, 2).Value)) = UCase(Trim(username)) Then
+            UserExists = True
+            Exit Function
+        End If
+    Next i
+    
+    UserExists = False
+End Function
+
+Private Function FindUserRow(userID As String) As Long
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Users")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    For i = 2 To lastRow
+        If UCase(Trim(ws.Cells(i, 1).Value)) = UCase(Trim(userID)) Then
+            FindUserRow = i
+            Exit Function
+        End If
+    Next i
+    
+    FindUserRow = 0
+End Function
+
+Public Function GetAllUsers() As Variant
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim usersArray() As String
+    Dim i As Long
+    Dim userCount As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Users")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    If lastRow < 2 Then
+        GetAllUsers = usersArray
+        Exit Function
+    End If
+    
+    userCount = 0
+    For i = 2 To lastRow
+        userCount = userCount + 1
+        ReDim Preserve usersArray(1 To 5, 1 To userCount)
+        usersArray(1, userCount) = ws.Cells(i, 1).Value ' UserID
+        usersArray(2, userCount) = ws.Cells(i, 2).Value ' Username
+        usersArray(3, userCount) = ws.Cells(i, 5).Value ' FullName
+        usersArray(4, userCount) = ws.Cells(i, 4).Value ' UserType
+        usersArray(5, userCount) = IIf(ws.Cells(i, 6).Value, "نشط", "غير نشط") ' IsActive
+    Next i
+    
+    GetAllUsers = usersArray
+End Function

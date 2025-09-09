@@ -1,0 +1,532 @@
+Option Explicit
+
+' === وظائف تهيئة النظام ===
+
+Public Function InitializeSystem() As Boolean
+    On Error GoTo ErrorHandler
+    
+    SystemStartTime = Now()
+    
+    ' إنشاء هيكل المجلدات
+    If Not CreateDirectoryStructure() Then
+        MsgBox "فشل في إنشاء المجلدات المطلوبة", vbCritical
+        InitializeSystem = False
+        Exit Function
+    End If
+    
+    ' تهيئة قاعدة البيانات
+    If Not InitializeDatabase() Then
+        MsgBox "فشل في تهيئة قاعدة البيانات", vbCritical
+        InitializeSystem = False
+        Exit Function
+    End If
+    
+    ' تنسيق الجداول
+    Call FormatDatabaseTables
+    
+    ' تحميل الإعدادات
+    Call LoadSystemSettings
+    
+    IsSystemInitialized = True
+    InitializeSystem = True
+    
+    ' تسجيل بداية تشغيل النظام
+    Call LogActivity("SYSTEM_START", "تم تشغيل النظام بنجاح")
+    
+    Exit Function
+    
+ErrorHandler:
+    Call LogError("InitializeSystem", Err.Description)
+    InitializeSystem = False
+End Function
+
+Public Function CreateDirectoryStructure() As Boolean
+    On Error GoTo ErrorHandler
+    
+    Dim basePath As String
+    Dim fso As Object
+    
+    basePath = ThisWorkbook.Path & "\"
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    ' إنشاء المجلدات الأساسية
+    If Not fso.FolderExists(basePath & DOCUMENTS_FOLDER) Then
+        fso.CreateFolder basePath & DOCUMENTS_FOLDER
+    End If
+    
+    If Not fso.FolderExists(basePath & REPORTS_FOLDER) Then
+        fso.CreateFolder basePath & REPORTS_FOLDER
+    End If
+    
+    If Not fso.FolderExists(basePath & IMPORTS_FOLDER) Then
+        fso.CreateFolder basePath & IMPORTS_FOLDER
+    End If
+    
+    If Not fso.FolderExists(basePath & BACKUPS_FOLDER) Then
+        fso.CreateFolder basePath & BACKUPS_FOLDER
+    End If
+    
+    If Not fso.FolderExists(basePath & TEMPLATES_FOLDER) Then
+        fso.CreateFolder basePath & TEMPLATES_FOLDER
+    End If
+    
+    If Not fso.FolderExists(basePath & LOGS_FOLDER) Then
+        fso.CreateFolder basePath & LOGS_FOLDER
+    End If
+    
+    CreateDirectoryStructure = True
+    Exit Function
+    
+ErrorHandler:
+    CreateDirectoryStructure = False
+End Function
+
+Public Function InitializeDatabase() As Boolean
+    On Error GoTo ErrorHandler
+    
+    ' التحقق من وجود الجداول المطلوبة وإنشاؤها إذا لم تكن موجودة
+    If Not WorksheetExists("Users") Then
+        Call CreateUsersTable
+    End If
+    
+    If Not WorksheetExists("Invoices") Then
+        Call CreateInvoicesTable
+    End If
+    
+    If Not WorksheetExists("PaymentTracking") Then
+        Call CreatePaymentTrackingTable
+    End If
+    
+    If Not WorksheetExists("Attachments") Then
+        Call CreateAttachmentsTable
+    End If
+    
+    If Not WorksheetExists("SystemLog") Then
+        Call CreateSystemLogTable
+    End If
+    
+    If Not WorksheetExists("SystemSettings") Then
+        Call CreateSystemSettingsTable
+    End If
+    
+    If Not WorksheetExists("InvoiceReport") Then
+        Call CreateInvoiceReportTemplate
+    End If
+    
+    InitializeDatabase = True
+    Exit Function
+    
+ErrorHandler:
+    InitializeDatabase = False
+End Function
+
+' === وظائف إدارة الأوراق ===
+
+Public Function WorksheetExists(sheetName As String) As Boolean
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(sheetName)
+    WorksheetExists = Not (ws Is Nothing)
+    On Error GoTo 0
+End Function
+
+Public Sub FormatDatabaseTables()
+    On Error Resume Next
+    
+    ' تنسيق جدول المستخدمين
+    Call FormatSheet("Users", "A1:J1", PRIMARY_COLOR)
+    
+    ' تنسيق جدول الفواتير
+    Call FormatSheet("Invoices", "A1:V1", SUCCESS_COLOR)
+    
+    ' تنسيق جدول متابعة السداد
+    Call FormatSheet("PaymentTracking", "A1:S1", WARNING_COLOR)
+    
+    ' تنسيق جدول المرفقات
+    Call FormatSheet("Attachments", "A1:O1", RGB(155, 89, 182))
+    
+    ' تنسيق جدول السجلات
+    Call FormatSheet("SystemLog", "A1:L1", DANGER_COLOR)
+    
+    ' تنسيق جدول الإعدادات
+    Call FormatSheet("SystemSettings", "A1:I1", RGB(52, 73, 94))
+    
+    On Error GoTo 0
+End Sub
+
+Private Sub FormatSheet(sheetName As String, headerRange As String, color As Long)
+    On Error Resume Next
+    
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Worksheets(sheetName)
+    
+    If Not ws Is Nothing Then
+        With ws.Range(headerRange)
+            .Font.Bold = True
+            .Interior.Color = color
+            .Font.Color = RGB(255, 255, 255)
+            .HorizontalAlignment = xlCenter
+            .Font.Name = MAIN_FONT
+            .Font.Size = NORMAL_FONT_SIZE
+        End With
+        ws.Columns.AutoFit
+    End If
+    
+    On Error GoTo 0
+End Sub
+
+' === وظائف CRUD للفواتير ===
+
+Public Function AddNewInvoice(invoiceData As InvoiceInfo) As Boolean
+    On Error GoTo ErrorHandler
+    
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim newID As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Invoices")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    
+    ' التحقق من عدم تكرار رقم الفاتورة
+    If InvoiceExists(invoiceData.InvoiceNumber) Then
+        MsgBox "رقم الفاتورة موجود مسبقاً: " & invoiceData.InvoiceNumber, vbCritical
+        AddNewInvoice = False
+        Exit Function
+    End If
+    
+    ' توليد ID جديد
+    newID = GetNextInvoiceID()
+    
+    ' إدراج البيانات
+    With ws
+        .Cells(lastRow, 1).Value = newID
+        .Cells(lastRow, 2).Value = GetNextSerialNumber()
+        .Cells(lastRow, 3).Value = invoiceData.ClaimNumber
+        .Cells(lastRow, 4).Value = invoiceData.ClaimDate
+        .Cells(lastRow, 5).Value = invoiceData.InvoiceNumber
+        .Cells(lastRow, 6).Value = invoiceData.InvoiceDate
+        .Cells(lastRow, 7).Value = invoiceData.AmountWithoutStamp
+        .Cells(lastRow, 8).Value = invoiceData.StampDuty
+        .Cells(lastRow, 9).Value = invoiceData.TotalAmount
+        .Cells(lastRow, 10).Value = invoiceData.PolicyNumber
+        .Cells(lastRow, 11).Value = invoiceData.LCNumber
+        .Cells(lastRow, 12).Value = invoiceData.ContractNumber
+        .Cells(lastRow, 13).Value = invoiceData.CustomsDeclaration
+        .Cells(lastRow, 14).Value = invoiceData.EntryPort
+        .Cells(lastRow, 15).Value = "غير مسدد"
+        .Cells(lastRow, 16).Value = ""
+        .Cells(lastRow, 17).Value = CurrentUser.Username
+        .Cells(lastRow, 18).Value = Now()
+        .Cells(lastRow, 19).Value = ""
+        .Cells(lastRow, 20).Value = ""
+        .Cells(lastRow, 21).Value = False
+        .Cells(lastRow, 22).Value = invoiceData.Notes
+    End With
+    
+    ' تسجيل العملية
+    Call LogActivity("ADD_INVOICE", "تم إضافة فاتورة جديدة: " & invoiceData.InvoiceNumber)
+    
+    AddNewInvoice = True
+    Exit Function
+    
+ErrorHandler:
+    Call LogError("AddNewInvoice", Err.Description)
+    AddNewInvoice = False
+End Function
+
+Public Function UpdateInvoice(invoiceID As Long, invoiceData As InvoiceInfo) As Boolean
+    On Error GoTo ErrorHandler
+    
+    Dim ws As Worksheet
+    Dim targetRow As Long
+    Dim oldInvoiceNumber As String
+    
+    Set ws = ThisWorkbook.Worksheets("Invoices")
+    targetRow = FindInvoiceRow(invoiceID)
+    
+    If targetRow = 0 Then
+        MsgBox "الفاتورة غير موجودة", vbCritical
+        UpdateInvoice = False
+        Exit Function
+    End If
+    
+    oldInvoiceNumber = ws.Cells(targetRow, 5).Value
+    
+    ' التحقق من عدم تكرار رقم الفاتورة الجديد (إذا تم تغييره)
+    If oldInvoiceNumber <> invoiceData.InvoiceNumber Then
+        If InvoiceExists(invoiceData.InvoiceNumber) Then
+            MsgBox "رقم الفاتورة الجديد موجود مسبقاً: " & invoiceData.InvoiceNumber, vbCritical
+            UpdateInvoice = False
+            Exit Function
+        End If
+    End If
+    
+    ' تحديث البيانات
+    With ws
+        .Cells(targetRow, 3).Value = invoiceData.ClaimNumber
+        .Cells(targetRow, 4).Value = invoiceData.ClaimDate
+        .Cells(targetRow, 5).Value = invoiceData.InvoiceNumber
+        .Cells(targetRow, 6).Value = invoiceData.InvoiceDate
+        .Cells(targetRow, 7).Value = invoiceData.AmountWithoutStamp
+        .Cells(targetRow, 8).Value = invoiceData.StampDuty
+        .Cells(targetRow, 9).Value = invoiceData.TotalAmount
+        .Cells(targetRow, 10).Value = invoiceData.PolicyNumber
+        .Cells(targetRow, 11).Value = invoiceData.LCNumber
+        .Cells(targetRow, 12).Value = invoiceData.ContractNumber
+        .Cells(targetRow, 13).Value = invoiceData.CustomsDeclaration
+        .Cells(targetRow, 14).Value = invoiceData.EntryPort
+        .Cells(targetRow, 19).Value = CurrentUser.Username
+        .Cells(targetRow, 20).Value = Now()
+        .Cells(targetRow, 22).Value = invoiceData.Notes
+    End With
+    
+    ' تسجيل العملية
+    Call LogActivity("UPDATE_INVOICE", "تم تعديل الفاتورة: " & invoiceData.InvoiceNumber)
+    
+    UpdateInvoice = True
+    Exit Function
+    
+ErrorHandler:
+    Call LogError("UpdateInvoice", Err.Description)
+    UpdateInvoice = False
+End Function
+
+Public Function DeleteInvoice(invoiceID As Long) As Boolean
+    On Error GoTo ErrorHandler
+    
+    Dim ws As Worksheet
+    Dim targetRow As Long
+    Dim invoiceNumber As String
+    
+    Set ws = ThisWorkbook.Worksheets("Invoices")
+    targetRow = FindInvoiceRow(invoiceID)
+    
+    If targetRow = 0 Then
+        MsgBox "الفاتورة غير موجودة", vbCritical
+        DeleteInvoice = False
+        Exit Function
+    End If
+    
+    invoiceNumber = ws.Cells(targetRow, 5).Value
+    
+    ' تأكيد الحذف
+    If MsgBox("هل أنت متأكد من حذف الفاتورة: " & invoiceNumber & "؟", vbYesNo + vbQuestion) = vbNo Then
+        DeleteInvoice = False
+        Exit Function
+    End If
+    
+    ' حذف منطقي (تعديل حالة IsDeleted)
+    ws.Cells(targetRow, 21).Value = True
+    ws.Cells(targetRow, 19).Value = CurrentUser.Username
+    ws.Cells(targetRow, 20).Value = Now()
+    
+    ' تسجيل العملية
+    Call LogActivity("DELETE_INVOICE", "تم حذف الفاتورة: " & invoiceNumber)
+    
+    DeleteInvoice = True
+    Exit Function
+    
+ErrorHandler:
+    Call LogError("DeleteInvoice", Err.Description)
+    DeleteInvoice = False
+End Function
+
+' === وظائف مساعدة ===
+
+Public Function InvoiceExists(invoiceNumber As String) As Boolean
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Invoices")
+    lastRow = ws.Cells(ws.Rows.Count, 5).End(xlUp).Row
+    
+    For i = 2 To lastRow
+        If ws.Cells(i, 5).Value = invoiceNumber And ws.Cells(i, 21).Value = False Then
+            InvoiceExists = True
+            Exit Function
+        End If
+    Next i
+    
+    InvoiceExists = False
+End Function
+
+Private Function GetNextInvoiceID() As Long
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim maxID As Long
+    Dim i As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Invoices")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    maxID = 0
+    For i = 2 To lastRow
+        If ws.Cells(i, 1).Value > maxID Then
+            maxID = ws.Cells(i, 1).Value
+        End If
+    Next i
+    
+    GetNextInvoiceID = maxID + 1
+End Function
+
+Private Function GetNextSerialNumber() As Long
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim maxSerial As Long
+    Dim i As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Invoices")
+    lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row
+    
+    maxSerial = 0
+    For i = 2 To lastRow
+        If ws.Cells(i, 2).Value > maxSerial And ws.Cells(i, 21).Value = False Then
+            maxSerial = ws.Cells(i, 2).Value
+        End If
+    Next i
+    
+    GetNextSerialNumber = maxSerial + 1
+End Function
+
+Private Function FindInvoiceRow(invoiceID As Long) As Long
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    
+    Set ws = ThisWorkbook.Worksheets("Invoices")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    For i = 2 To lastRow
+        If ws.Cells(i, 1).Value = invoiceID And ws.Cells(i, 21).Value = False Then
+            FindInvoiceRow = i
+            Exit Function
+        End If
+    Next i
+    
+    FindInvoiceRow = 0
+End Function
+
+Public Function GetInvoiceByNumber(invoiceNumber As String) As InvoiceInfo
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim invoice As InvoiceInfo
+    
+    Set ws = ThisWorkbook.Worksheets("Invoices")
+    lastRow = ws.Cells(ws.Rows.Count, 5).End(xlUp).Row
+    
+    For i = 2 To lastRow
+        If ws.Cells(i, 5).Value = invoiceNumber And ws.Cells(i, 21).Value = False Then
+            With invoice
+                .InvoiceID = ws.Cells(i, 1).Value
+                .SerialNumber = ws.Cells(i, 2).Value
+                .ClaimNumber = ws.Cells(i, 3).Value
+                .ClaimDate = ws.Cells(i, 4).Value
+                .InvoiceNumber = ws.Cells(i, 5).Value
+                .InvoiceDate = ws.Cells(i, 6).Value
+                .AmountWithoutStamp = ws.Cells(i, 7).Value
+                .StampDuty = ws.Cells(i, 8).Value
+                .TotalAmount = ws.Cells(i, 9).Value
+                .PolicyNumber = ws.Cells(i, 10).Value
+                .LCNumber = ws.Cells(i, 11).Value
+                .ContractNumber = ws.Cells(i, 12).Value
+                .CustomsDeclaration = ws.Cells(i, 13).Value
+                .EntryPort = ws.Cells(i, 14).Value
+                .PaymentStatus = ws.Cells(i, 15).Value
+                .PaymentDate = ws.Cells(i, 16).Value
+                .CreatedBy = ws.Cells(i, 17).Value
+                .CreatedDate = ws.Cells(i, 18).Value
+                .ModifiedBy = ws.Cells(i, 19).Value
+                .ModifiedDate = ws.Cells(i, 20).Value
+                .Notes = ws.Cells(i, 22).Value
+            End With
+            Exit For
+        End If
+    Next i
+    
+    GetInvoiceByNumber = invoice
+End Function
+
+' === وظائف الإحصائيات ===
+
+Public Function GetInvoiceStatistics() As String
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim totalInvoices As Long
+    Dim paidInvoices As Long
+    Dim unpaidInvoices As Long
+    Dim totalAmount As Double
+    
+    Set ws = ThisWorkbook.Worksheets("Invoices")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    For i = 2 To lastRow
+        If ws.Cells(i, 21).Value = False Then ' غير محذوف
+            totalInvoices = totalInvoices + 1
+            totalAmount = totalAmount + ws.Cells(i, 9).Value
+            
+            If ws.Cells(i, 15).Value = "مسدد" Then
+                paidInvoices = paidInvoices + 1
+            Else
+                unpaidInvoices = unpaidInvoices + 1
+            End If
+        End If
+    Next i
+    
+    GetInvoiceStatistics = "إجمالي: " & totalInvoices & " | مسدد: " & paidInvoices & " | غير مسدد: " & unpaidInvoices & " | المبلغ: " & Format(totalAmount, "#,##0.00")
+End Function
+
+' === وظائف السجلات ===
+
+Public Sub LogActivity(action As String, description As String)
+    On Error Resume Next
+    
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    
+    Set ws = ThisWorkbook.Worksheets("SystemLog")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    
+    With ws
+        .Cells(lastRow, 1).Value = lastRow - 1 ' LogID
+        .Cells(lastRow, 2).Value = CurrentUser.Username
+        .Cells(lastRow, 3).Value = action
+        .Cells(lastRow, 10).Value = Now()
+        .Cells(lastRow, 11).Value = "INFO"
+        .Cells(lastRow, 12).Value = description
+    End With
+    
+    On Error GoTo 0
+End Sub
+
+Public Sub LogError(functionName As String, errorDescription As String)
+    On Error Resume Next
+    
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    
+    Set ws = ThisWorkbook.Worksheets("SystemLog")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    
+    With ws
+        .Cells(lastRow, 1).Value = lastRow - 1 ' LogID
+        .Cells(lastRow, 2).Value = CurrentUser.Username
+        .Cells(lastRow, 3).Value = "ERROR"
+        .Cells(lastRow, 10).Value = Now()
+        .Cells(lastRow, 11).Value = "ERROR"
+        .Cells(lastRow, 12).Value = functionName & ": " & errorDescription
+    End With
+    
+    On Error GoTo 0
+End Sub
+
+' === وظائف الإعدادات ===
+
+Public Sub LoadSystemSettings()
+    On Error Resume Next
+    ' تحميل إعدادات النظام من جدول SystemSettings
+    ' يمكن إضافة المزيد من الإعدادات هنا
+    On Error GoTo 0
+End Sub

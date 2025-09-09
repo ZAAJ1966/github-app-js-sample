@@ -1,0 +1,284 @@
+Option Explicit
+
+' === أحداث فتح وإغلاق المصنف ===
+
+Private Sub Workbook_Open()
+    ' تسجيل بداية تشغيل النظام
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    ' إخفاء جميع الأوراق عدا Dashboard
+    Call HideWorksheets
+    
+    ' تهيئة النظام
+    If InitializeSystem() Then
+        ' تشغيل نموذج تسجيل الدخول
+        Application.ScreenUpdating = True
+        UserForm_Login.Show
+    Else
+        MsgBox "فشل في تهيئة النظام. يرجى الاتصال بالدعم الفني.", vbCritical, "خطأ في التهيئة"
+        Application.ScreenUpdating = True
+        ThisWorkbook.Close False
+    End If
+    
+    Application.DisplayAlerts = True
+End Sub
+
+Private Sub Workbook_BeforeClose(Cancel As Boolean)
+    ' إجراءات ما قبل الإغلاق
+    
+    If IsLoggedIn Then
+        ' تسجيل خروج المستخدم
+        Call LogActivity("SYSTEM_CLOSE", "إغلاق النظام بواسطة: " & CurrentUser.Username)
+        Call LogoutCurrentUser
+    End If
+    
+    ' إنشاء نسخة احتياطية تلقائية
+    Call CreateAutoBackup
+    
+    ' حفظ تلقائي
+    If ThisWorkbook.Saved = False Then
+        ThisWorkbook.Save
+    End If
+    
+    ' إظهار رسالة وداع
+    If Not Cancel Then
+        MsgBox "شكراً لاستخدام " & APP_NAME & vbCrLf & _
+               "تم حفظ جميع البيانات بنجاح.", _
+               vbInformation, "إغلاق النظام"
+    End If
+End Sub
+
+Private Sub Workbook_BeforeSave(ByVal SaveAsUI As Boolean, Cancel As Boolean)
+    ' تسجيل عملية الحفظ
+    If IsLoggedIn Then
+        Call LogActivity("WORKBOOK_SAVE", "تم حفظ المصنف")
+    End If
+End Sub
+
+' === أحداث تفعيل الأوراق ===
+
+Private Sub Workbook_SheetActivate(ByVal Sh As Object)
+    ' منع الوصول المباشر للأوراق بدون تسجيل دخول
+    If Not IsLoggedIn And Sh.Name <> "Dashboard" Then
+        MsgBox "يجب تسجيل الدخول أولاً للوصول لهذه الورقة", vbExclamation
+        ThisWorkbook.Worksheets("Dashboard").Activate
+        Exit Sub
+    End If
+    
+    ' تسجيل الوصول للورقة
+    If IsLoggedIn Then
+        Call LogActivity("SHEET_ACCESS", "تم الوصول للورقة: " & Sh.Name)
+    End If
+End Sub
+
+Private Sub Workbook_SheetBeforeDoubleClick(ByVal Sh As Object, ByVal Target As Range, Cancel As Boolean)
+    ' منع التعديل المباشر في الجداول المحمية
+    Dim protectedSheets As Variant
+    protectedSheets = Array("Users", "SystemLog", "SystemSettings")
+    
+    Dim i As Integer
+    For i = 0 To UBound(protectedSheets)
+        If Sh.Name = protectedSheets(i) Then
+            If Not CheckPermission("DIRECT_EDIT") Then
+                MsgBox "لا يمكن التعديل المباشر في هذا الجدول. يرجى استخدام النماذج المخصصة.", _
+                       vbExclamation, "تعديل مرفوض"
+                Cancel = True
+                Exit Sub
+            End If
+        End If
+    Next i
+End Sub
+
+Private Sub Workbook_SheetChange(ByVal Sh As Object, ByVal Target As Range)
+    ' تسجيل التغييرات المباشرة في الأوراق
+    If IsLoggedIn And IsSystemInitialized Then
+        Dim changeInfo As String
+        changeInfo = "تغيير مباشر في الورقة: " & Sh.Name & " الخلية: " & Target.Address
+        Call LogActivity("DIRECT_CHANGE", changeInfo)
+    End If
+End Sub
+
+' === وظائف مساعدة ===
+
+Private Sub HideWorksheets()
+    ' إخفاء جميع أوراق قاعدة البيانات
+    Dim ws As Worksheet
+    Dim protectedSheets As Variant
+    
+    protectedSheets = Array("Users", "Invoices", "PaymentTracking", "Attachments", "SystemLog", "SystemSettings")
+    
+    For Each ws In ThisWorkbook.Worksheets
+        Dim i As Integer
+        For i = 0 To UBound(protectedSheets)
+            If ws.Name = protectedSheets(i) Then
+                ws.Visible = xlSheetVeryHidden
+                Exit For
+            End If
+        Next i
+    Next ws
+    
+    ' التأكد من وجود ورقة Dashboard مرئية
+    On Error Resume Next
+    ThisWorkbook.Worksheets("Dashboard").Visible = xlSheetVisible
+    If Err.Number <> 0 Then
+        ' إنشاء ورقة Dashboard إذا لم تكن موجودة
+        Set ws = ThisWorkbook.Worksheets.Add
+        ws.Name = "Dashboard"
+        ws.Cells(1, 1).Value = "لوحة تحكم " & APP_NAME
+        ws.Cells(1, 1).Font.Size = 16
+        ws.Cells(1, 1).Font.Bold = True
+    End If
+    On Error GoTo 0
+End Sub
+
+Public Sub ShowWorksheets()
+    ' إظهار الأوراق للمدير فقط
+    If CheckPermission("VIEW_ALL_SHEETS") Then
+        Dim ws As Worksheet
+        For Each ws In ThisWorkbook.Worksheets
+            ws.Visible = xlSheetVisible
+        Next ws
+    End If
+End Sub
+
+Public Sub CreateAutoBackup()
+    ' إنشاء نسخة احتياطية تلقائية
+    On Error Resume Next
+    
+    Dim backupPath As String
+    Dim backupFileName As String
+    Dim timestamp As String
+    
+    timestamp = Format(Now(), "yyyy-mm-dd_hh-nn-ss")
+    backupFileName = "backup_" & timestamp & ".xlsm"
+    backupPath = ThisWorkbook.Path & "\" & BACKUPS_FOLDER & "\" & backupFileName
+    
+    ' التأكد من وجود مجلد النسخ الاحتياطية
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    If Not fso.FolderExists(ThisWorkbook.Path & "\" & BACKUPS_FOLDER) Then
+        fso.CreateFolder ThisWorkbook.Path & "\" & BACKUPS_FOLDER
+    End If
+    
+    ' نسخ الملف
+    ThisWorkbook.SaveCopyAs backupPath
+    
+    ' تنظيف النسخ القديمة
+    Call CleanOldBackups
+    
+    On Error GoTo 0
+End Sub
+
+Private Sub CleanOldBackups()
+    ' حذف النسخ الاحتياطية القديمة (الاحتفاظ بآخر 30 نسخة)
+    On Error Resume Next
+    
+    Dim fso As Object
+    Dim folder As Object
+    Dim files As Object
+    Dim file As Object
+    Dim fileList() As String
+    Dim fileCount As Integer
+    Dim i As Integer
+    
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    If fso.FolderExists(ThisWorkbook.Path & "\" & BACKUPS_FOLDER) Then
+        Set folder = fso.GetFolder(ThisWorkbook.Path & "\" & BACKUPS_FOLDER)
+        Set files = folder.files
+        
+        ' جمع أسماء ملفات النسخ الاحتياطية
+        fileCount = 0
+        For Each file In files
+            If Left(file.Name, 7) = "backup_" And Right(file.Name, 5) = ".xlsm" Then
+                fileCount = fileCount + 1
+                ReDim Preserve fileList(1 To fileCount)
+                fileList(fileCount) = file.Name
+            End If
+        Next file
+        
+        ' حذف النسخ الزائدة عن 30
+        If fileCount > 30 Then
+            ' ترتيب الملفات (الأقدم أولاً)
+            Call SortFileArray(fileList)
+            
+            ' حذف النسخ الأقدم
+            For i = 1 To fileCount - 30
+                fso.DeleteFile ThisWorkbook.Path & "\" & BACKUPS_FOLDER & "\" & fileList(i)
+            Next i
+        End If
+    End If
+    
+    On Error GoTo 0
+End Sub
+
+Private Sub SortFileArray(ByRef arr() As String)
+    ' ترتيب مصفوفة أسماء الملفات (ترتيب فقاعي بسيط)
+    Dim i As Integer
+    Dim j As Integer
+    Dim temp As String
+    
+    For i = 1 To UBound(arr) - 1
+        For j = i + 1 To UBound(arr)
+            If arr(i) > arr(j) Then
+                temp = arr(i)
+                arr(i) = arr(j)
+                arr(j) = temp
+            End If
+        Next j
+    Next i
+End Sub
+
+' === وظائف الطوارئ ===
+
+Public Sub EmergencyReset()
+    ' إعادة تعيين النظام في حالات الطوارئ
+    ' يجب استخدامها بحذر شديد
+    
+    Dim response As Integer
+    response = MsgBox("تحذير: هذه العملية ستعيد تعيين جميع إعدادات النظام" & vbCrLf & _
+                      "هل أنت متأكد من المتابعة؟", _
+                      vbYesNo + vbCritical, "إعادة تعيين الطوارئ")
+    
+    If response = vbYes Then
+        ' إعادة تعيين المتغيرات
+        IsLoggedIn = False
+        IsSystemInitialized = False
+        
+        ' إظهار جميع الأوراق
+        Dim ws As Worksheet
+        For Each ws In ThisWorkbook.Worksheets
+            ws.Visible = xlSheetVisible
+        Next ws
+        
+        ' فتح نموذج تسجيل الدخول
+        UserForm_Login.Show
+        
+        MsgBox "تم إعادة تعيين النظام", vbInformation
+    End If
+End Sub
+
+Public Sub ShowSystemInfo()
+    ' عرض معلومات النظام
+    Dim info As String
+    
+    info = "معلومات النظام:" & vbCrLf & vbCrLf
+    info = info & "اسم النظام: " & APP_NAME & vbCrLf
+    info = info & "الإصدار: " & APP_VERSION & vbCrLf
+    info = info & "تاريخ الإصدار: " & APP_BUILD & vbCrLf
+    info = info & "المطور: " & DEVELOPER & vbCrLf & vbCrLf
+    
+    If IsLoggedIn Then
+        info = info & "المستخدم الحالي: " & CurrentUser.FullName & vbCrLf
+        info = info & "نوع المستخدم: " & CurrentUser.UserType & vbCrLf
+        info = info & "وقت بداية الجلسة: " & Format(SystemStartTime, "dd/mm/yyyy hh:nn:ss") & vbCrLf
+    Else
+        info = info & "لا يوجد مستخدم مسجل دخول حالياً" & vbCrLf
+    End If
+    
+    info = info & vbCrLf & "مسار الملف: " & ThisWorkbook.FullName
+    
+    MsgBox info, vbInformation, "معلومات النظام"
+End Sub
