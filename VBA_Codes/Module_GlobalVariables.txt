@@ -1,0 +1,105 @@
+Option Explicit
+
+' ثوابت النظام
+Public Const APP_NAME As String = "نظام إدارة فواتير عوائد المناولة والتخزين"
+Public Const APP_VERSION As String = "1.0.0"
+Public Const APP_BUILD As String = "20250115"
+Public Const DEVELOPER As String = "فريق تطوير النظام"
+
+' مسارات المجلدات
+Public Const DOCUMENTS_FOLDER As String = "Documents"
+Public Const REPORTS_FOLDER As String = "PDFReports"
+Public Const IMPORTS_FOLDER As String = "ImportedData"
+Public Const BACKUPS_FOLDER As String = "Backups"
+Public Const TEMPLATES_FOLDER As String = "Templates"
+Public Const LOGS_FOLDER As String = "Logs"
+
+' متغيرات المستخدم الحالي
+Public CurrentUser As UserInfo
+Public IsSystemInitialized As Boolean
+Public IsLoggedIn As Boolean
+
+' هياكل البيانات المخصصة
+Public Type UserInfo
+    UserID As String
+    Username As String
+    FullName As String
+    UserType As String
+    IsActive As Boolean
+    LastLogin As Date
+    Permissions As String
+End Type
+
+Public Type InvoiceInfo
+    InvoiceID As Long
+    SerialNumber As Long
+    ClaimNumber As String
+    ClaimDate As Date
+    InvoiceNumber As String
+    InvoiceDate As Date
+    AmountWithoutStamp As Double
+    StampDuty As Double
+    TotalAmount As Double
+    PolicyNumber As String
+    LCNumber As String
+    ContractNumber As String
+    CustomsDeclaration As String
+    EntryPort As String
+    PaymentStatus As String
+    PaymentDate As Date
+    CreatedBy As String
+    CreatedDate As Date
+    ModifiedBy As String
+    ModifiedDate As Date
+    Notes As String
+End Type
+
+' تعدادات النظام
+Public Enum UserTypes
+    Manager = 1
+    ClearanceOfficer = 2
+    Auditor = 3
+    Accountant = 4
+End Enum
+
+Public Enum PaymentStatus
+    Unpaid = 0
+    Paid = 1
+    Partial = 2
+    Cancelled = 3
+End Enum
+
+Public Enum DocumentTypes
+    Invoice = 1
+    BillOfLading = 2
+    CertificateOfOrigin = 3
+    DeliveryOrder = 4
+    PackingList = 5
+    Other = 99
+End Enum
+
+Public Enum LogLevels
+    Info = 1
+    Warning = 2
+    ErrorLevel = 3
+    Debug = 4
+End Enum
+
+' متغيرات الأداء
+Public LastDatabaseUpdate As Date
+Public SystemStartTime As Date
+Public ActiveConnections As Integer
+
+' ألوان النظام
+Public Const PRIMARY_COLOR As Long = 2854399    ' RGB(41, 128, 185) - أزرق
+Public Const SECONDARY_COLOR As Long = 3368652  ' RGB(52, 152, 219) - أزرق فاتح
+Public Const SUCCESS_COLOR As Long = 2541174    ' RGB(39, 174, 96) - أخضر
+Public Const WARNING_COLOR As Long = 1023215    ' RGB(241, 196, 15) - أصفر
+Public Const DANGER_COLOR As Long = 3973631     ' RGB(231, 76, 60) - أحمر
+Public Const BACKGROUND_COLOR As Long = 15856113 ' RGB(236, 240, 241) - رمادي فاتح
+
+' إعدادات الخطوط
+Public Const MAIN_FONT As String = "Tahoma"
+Public Const TITLE_FONT_SIZE As Integer = 14
+Public Const NORMAL_FONT_SIZE As Integer = 10
+Public Const SMALL_FONT_SIZE As Integer = 8

@@ -1,0 +1,239 @@
+Option Explicit
+
+' === أحداث النموذج ===
+
+Private Sub UserForm_Initialize()
+    ' تهيئة النموذج عند تحميله
+    Me.Caption = "تسجيل الدخول - " & APP_NAME
+    
+    ' تعيين الخصائص الأساسية
+    txtUsername.SetFocus
+    txtPassword.PasswordChar = "*"
+    
+    ' تطبيق التصميم
+    Call ApplyFormStyling
+    
+    ' تحميل بيانات تجريبية إذا كانت فارغة
+    If txtUsername.Text = "" Then
+        txtUsername.Text = "admin"
+    End If
+End Sub
+
+Private Sub UserForm_Activate()
+    ' التأكد من التركيز على حقل اسم المستخدم
+    If txtUsername.Text = "" Then
+        txtUsername.SetFocus
+    ElseIf txtPassword.Text = "" Then
+        txtPassword.SetFocus
+    End If
+End Sub
+
+' === أحداث الأزرار ===
+
+Private Sub cmdLogin_Click()
+    Dim username As String
+    Dim password As String
+    
+    ' الحصول على البيانات المدخلة
+    username = Trim(txtUsername.Text)
+    password = Trim(txtPassword.Text)
+    
+    ' التحقق من الحقول الفارغة
+    If username = "" Then
+        MsgBox "يرجى إدخال اسم المستخدم", vbExclamation, "حقل مطلوب"
+        txtUsername.SetFocus
+        Exit Sub
+    End If
+    
+    If password = "" Then
+        MsgBox "يرجى إدخال كلمة المرور", vbExclamation, "حقل مطلوب"
+        txtPassword.SetFocus
+        Exit Sub
+    End If
+    
+    ' تعطيل الأزرار أثناء المعالجة
+    cmdLogin.Enabled = False
+    cmdExit.Enabled = False
+    Me.MousePointer = fmMousePointerHourGlass
+    
+    ' التحقق من بيانات الدخول
+    If ValidateLogin(username, password) Then
+        ' تسجيل دخول ناجح
+        MsgBox "مرحباً " & CurrentUser.FullName & vbCrLf & _
+               "نوع المستخدم: " & CurrentUser.UserType, _
+               vbInformation, "تسجيل دخول ناجح"
+        
+        ' إخفاء نموذج تسجيل الدخول
+        Me.Hide
+        
+        ' فتح الواجهة الرئيسية
+        On Error Resume Next
+        UserForm_MainMenu.Show
+        On Error GoTo 0
+        
+        ' إذا لم تكن الواجهة الرئيسية موجودة بعد، اعرض رسالة
+        If Err.Number <> 0 Then
+            MsgBox "تم تسجيل الدخول بنجاح!" & vbCrLf & _
+                   "الواجهة الرئيسية قيد التطوير.", _
+                   vbInformation, "تسجيل دخول ناجح"
+            Me.Hide
+        End If
+        
+    Else
+        ' تسجيل دخول فاشل
+        txtPassword.Text = ""
+        txtUsername.SetFocus
+        
+        ' إعادة تفعيل الأزرار
+        cmdLogin.Enabled = True
+        cmdExit.Enabled = True
+        Me.MousePointer = fmMousePointerDefault
+    End If
+End Sub
+
+Private Sub cmdExit_Click()
+    ' تأكيد الخروج
+    If MsgBox("هل تريد إغلاق النظام؟", vbYesNo + vbQuestion, "تأكيد الخروج") = vbYes Then
+        Call LogActivity("SYSTEM_EXIT", "إغلاق النظام من نموذج تسجيل الدخول")
+        ThisWorkbook.Close False
+    End If
+End Sub
+
+' === أحداث لوحة المفاتيح ===
+
+Private Sub txtUsername_KeyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)
+    ' الانتقال لحقل كلمة المرور عند الضغط على Enter
+    If KeyCode = 13 Then ' Enter key
+        txtPassword.SetFocus
+    End If
+End Sub
+
+Private Sub txtPassword_KeyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)
+    ' تسجيل الدخول عند الضغط على Enter
+    If KeyCode = 13 Then ' Enter key
+        Call cmdLogin_Click
+    End If
+End Sub
+
+' === وظائف التصميم ===
+
+Private Sub ApplyFormStyling()
+    ' تطبيق ألوان وتنسيق النموذج
+    
+    ' خلفية النموذج
+    Me.BackColor = BACKGROUND_COLOR
+    
+    ' تنسيق العنوان
+    With lblTitle
+        .Font.Name = MAIN_FONT
+        .Font.Size = TITLE_FONT_SIZE
+        .Font.Bold = True
+        .ForeColor = PRIMARY_COLOR
+    End With
+    
+    ' تنسيق التسميات
+    With lblUsername
+        .Font.Name = MAIN_FONT
+        .Font.Size = NORMAL_FONT_SIZE
+        .ForeColor = RGB(52, 73, 94)
+    End With
+    
+    With lblPassword
+        .Font.Name = MAIN_FONT
+        .Font.Size = NORMAL_FONT_SIZE
+        .ForeColor = RGB(52, 73, 94)
+    End With
+    
+    ' تنسيق حقول الإدخال
+    With txtUsername
+        .Font.Name = MAIN_FONT
+        .Font.Size = NORMAL_FONT_SIZE
+        .BackColor = RGB(255, 255, 255)
+        .BorderStyle = fmBorderStyleSingle
+    End With
+    
+    With txtPassword
+        .Font.Name = MAIN_FONT
+        .Font.Size = NORMAL_FONT_SIZE
+        .BackColor = RGB(255, 255, 255)
+        .BorderStyle = fmBorderStyleSingle
+    End With
+    
+    ' تنسيق الأزرار
+    With cmdLogin
+        .Font.Name = MAIN_FONT
+        .Font.Size = NORMAL_FONT_SIZE
+        .Font.Bold = True
+        .BackColor = SUCCESS_COLOR
+        .ForeColor = RGB(255, 255, 255)
+    End With
+    
+    With cmdExit
+        .Font.Name = MAIN_FONT
+        .Font.Size = NORMAL_FONT_SIZE
+        .Font.Bold = True
+        .BackColor = DANGER_COLOR
+        .ForeColor = RGB(255, 255, 255)
+    End With
+    
+    ' إضافة معلومات الإصدار
+    If Not lblVersion Is Nothing Then
+        With lblVersion
+            .Caption = "الإصدار " & APP_VERSION
+            .Font.Name = MAIN_FONT
+            .Font.Size = SMALL_FONT_SIZE
+            .ForeColor = RGB(127, 140, 141)
+        End With
+    End If
+End Sub
+
+' === وظائف مساعدة ===
+
+Private Sub ShowLoginError(message As String)
+    ' عرض رسالة خطأ مع تنسيق موحد
+    MsgBox message, vbCritical, "خطأ في تسجيل الدخول"
+End Sub
+
+Private Sub ClearForm()
+    ' مسح حقول النموذج
+    txtUsername.Text = ""
+    txtPassword.Text = ""
+    txtUsername.SetFocus
+End Sub
+
+' === وظائف التحقق ===
+
+Private Function ValidateInput() As Boolean
+    ' التحقق من صحة المدخلات
+    ValidateInput = True
+    
+    If Trim(txtUsername.Text) = "" Then
+        Call ShowLoginError("يرجى إدخال اسم المستخدم")
+        txtUsername.SetFocus
+        ValidateInput = False
+        Exit Function
+    End If
+    
+    If Trim(txtPassword.Text) = "" Then
+        Call ShowLoginError("يرجى إدخال كلمة المرور")
+        txtPassword.SetFocus
+        ValidateInput = False
+        Exit Function
+    End If
+    
+    ' التحقق من طول اسم المستخدم
+    If Len(Trim(txtUsername.Text)) < 3 Then
+        Call ShowLoginError("اسم المستخدم يجب أن يكون 3 أحرف على الأقل")
+        txtUsername.SetFocus
+        ValidateInput = False
+        Exit Function
+    End If
+    
+    ' التحقق من طول كلمة المرور
+    If Len(Trim(txtPassword.Text)) < 4 Then
+        Call ShowLoginError("كلمة المرور يجب أن تكون 4 أحرف على الأقل")
+        txtPassword.SetFocus
+        ValidateInput = False
+        Exit Function
+    End If
+End Function
